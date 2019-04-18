@@ -1,13 +1,35 @@
 ---
 title: "R Notebook"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 The goal of this analysis is to perform a CT group analysis of my Mimulus time course data.
 
 I will modify Dan's script: "CT_group_analysis.R"
 
-The data is from my JTK_Cycle.Rmd: "results_c_filtered" and "results_f_filtered".
+The data is from my JTK_Cycle.Rmd: "results_c_filtered" and "results_f_filtered". (And some other stuffs. Please load the JTK_Cycle_environment.RData.)
+
+# 0. Loading the environment and packages:
+```{r}
+library(reshape2)
+library(ggplot2)
+library(dplyr)
+
+
+load("C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/CT_group_analysis/JTK_Cycle_environment.RData")
+#load('JTK_Cycle_environment.RData')
+
+
+# The function for calculating standard error.
+se = function(x) {
+    x = na.omit(x)
+    sd(x)/sqrt(length(x))
+}
+
+```
+
 
 # 1. Organizing the data:
 
@@ -17,10 +39,14 @@ The data is from my JTK_Cycle.Rmd: "results_c_filtered" and "results_f_filtered"
 
 - Thus, there are some differences between Dan's and my data:
 (a) Dan's: 
-    CT_groups: Store the info of CT phase of each gene.
-    expr_transcript -> expr_gene -> log_expr_gene: expression data
+    - CT_groups: Define the CT phase of each gene. (From previous microarray data.)
+    - expr_transcript -> expr_gene -> log_expr_gene: expression data
+    - sub_sample_info: metadata, including Date, ZT, Trt, Samples, etc
     
 (b) Mine:"results_c_filtered" and "results_f_filtered" contain all info of my data.
+    20190416: (1) Subset the "results_c_filtered" and "results_f_filtered" to extract the info about the CT phase                 of each gene.
+              (2) USe the output of limma-voom: DGEList object (d0) and normalized cpm (cpm_GCfiltered).
+
 ```{r}
 results_c_filtered$LAG <- factor(results_c_filtered$LAG)
 results_f_filtered$LAG <- factor(results_f_filtered$LAG)
@@ -30,8 +56,6 @@ sample_info_swc <- data.frame(Samples = colnames(results_c_filtered[,-c(1:6)]), 
 sample_info_swc$ZT <- rep(seq(from=14, to=38, by=3),each=4)
 
 ```
-
-
 
 
 
@@ -47,30 +71,26 @@ CT_group_means_swc = apply(CT_group_means_swc,2,'/',apply(CT_group_means_swc,1,s
 ```
 
 
-
-
-
-#3 
-
+#3 Visualization of the CT groups under the constatn tmp condition (c condition).
 ```{r}
-#fun = function(x) x
+# Preparing for de-transformation:
+fun = function(x) x
 ifun = function(x) x
+
 
 #pdf('CT_group_plots_by_time.pdf')
 
-library(reshape)
-library(ggplot2)
-library(dplyr)
 
+# Create empty data.frame for the following analysis:
 df <- data.frame(matrix(ncol = 16, nrow = 36))
 colnames(df) <- paste0("y_PG_", c(1:16))
-
 sample_info_swc <- bind_cols(sample_info_swc, df)
 
 final.means <- data.frame(matrix(ncol = 16, nrow = 9)) %>% mutate(ZT=seq(from=14, to=38, by=3))
-
 final.ses <- data.frame(matrix(ncol = 16, nrow = 9)) %>% mutate(ZT=seq(from=14, to=38, by=3))
 
+
+# Filling the empty dataframes!
 for(i in 1:nrow(CT_group_means_swc)){
 	print(i)
 	sample_info_swc[,i+2] = CT_group_means_swc[i,]
@@ -94,28 +114,28 @@ colnames.vextor <- c(paste0("PG_", c(1:16)),"ZT")
 colnames(final.means) <- colnames.vextor
 colnames(final.ses) <- colnames.vextor
 
+
+# Prepare the melted data.frame for the visualization:
 m_final.means <- melt(final.means, id.vars="ZT")
-m_final.means <- m_final.means %>% rename(means=value, phase.group=variable)
+m_final.means <- m_final.means %>% dplyr::rename(means=value, phase.group=variable)
 
 m_sample_info_swc <- melt(sample_info_swc , id.vars=c("Samples","ZT"))
-m_sample_info_swc <- m_sample_info_swc %>% rename(expression=value, phase.group=variable)
+m_sample_info_swc <- m_sample_info_swc %>% dplyr::rename(expression=value, phase.group=variable)
 
+
+# Visualization (Combine 16 plots into a single figure, but without CI):
 p = ggplot(m_sample_info_swc,aes(x = ZT,y=expression))
 #p = p +  geom_point()
 	# p = p + geom_smooth(aes(color = Treatment),method=lm)
 	# p = p + geom_ribbon(data=mean_data,aes(x=ZT,y=mean,ymin = ymin,ymax=ymax, linetype=NA),alpha = .2)
 p = p + geom_line(data=m_final.means,aes(x=ZT,y=means, color=phase.group)) 
 	#p = p + facet_grid(Sampling.Day~Genotype) + ylim(c(min(CT_group_means_swc),max(CT_group_means_swc)))
-	print(p)		
+print(p)
+	
+#dev.off()
 
 
-
-
-
-
-
-
-# Original:
+# Original visualization (generate 16 plots): 
 for(i in 1:nrow(CT_group_means_swc)){
 	print(i)
 	sample_info_swc$y = CT_group_means_swc[i,]
@@ -136,7 +156,6 @@ for(i in 1:nrow(CT_group_means_swc)){
 	mean_data$mean = ifun(mean_data$mean)
 	mean_data$ymin = ifun(mean_data$ymin)
 	mean_data$ymax = ifun(mean_data$ymax)
-
 	# mean_data$ZT = factor(mean_data$ZT)
 	p = ggplot(sample_info_swc,aes(x = ZT,y=y)) + ggtitle(rownames(CT_group_means_swc)[i])
 	p = p +  geom_point()
@@ -146,14 +165,6 @@ for(i in 1:nrow(CT_group_means_swc)){
 	#p = p + facet_grid(Sampling.Day~Genotype) + ylim(c(min(CT_group_means_swc),max(CT_group_means_swc)))
 	print(p)		
 }
-
-
-
-
-
-
-
-
 ```
 
 
@@ -165,6 +176,7 @@ for(i in 1:nrow(CT_group_means_swc)){
 3. Create a metadata for the new data set: Sample, ZT, Trt
 > Use the info from DGEList object$samples
 
+## 4.1 Using the CT groups from c condition first:
 
 #### Porcessing the data:
 ```{r}
@@ -191,6 +203,7 @@ metadata.swc$ZT <- rep(seq(from=14, to=38, by=3),each=4)
 
 ```
 
+
 #### Analyzing:
 ```{r}
 # calculate mean expression of each CT group in each sample
@@ -203,8 +216,11 @@ CT_group_means_c_swc = apply(CT_group_means_c_swc,2,'-',rowMeans(CT_group_means_
 CT_group_means_c_swc = apply(CT_group_means_c_swc,2,'/',apply(CT_group_means_c_swc,1,sd))
 
 
+# Preparing for de-transformation:
 fun = function(x) x
 ifun = function(x) x
+
+
 #pdf('CT_group_plots_by_time.pdf')
 
 for(i in 1:nrow(CT_group_means_c_swc)){
@@ -243,7 +259,87 @@ for(i in 1:nrow(CT_group_means_c_swc)){
 ```
 
 
+## 4.2 Using the CT groups from f condition:
 
+#### Porcessing the data:
+```{r}
+# Using the CT groups defined by JTK_Cycle under the constant condition:
+CT_groups_f_swc <- results_f_filtered %>% select(genes, CT.Phase.Group = LAG)
+#CT_groups_c_swc <- CT_groups_c_swc[order(CT_groups_c_swc$genes),]
+
+
+# select genes in CT groups (I didn't sort the CT_groups_c_swc$genes)
+gene_data2 <- cpm_GCfiltered
+gene_data2 = gene_data2[rownames(gene_data2) %in% CT_groups_f_swc$genes,]
+
+
+# select CT_groups rows with genes in gene_data2 and sort them
+CT_groups_f_swc = CT_groups_f_swc[match(rownames(gene_data2),CT_groups_f_swc$genes),]
+
+all(CT_groups_f_swc$genes == rownames(gene_data2))
+CT_groups_f_swc$CT.Phase.Group = factor(CT_groups_f_swc$CT.Phase.Group)
+
+
+# Create a metadata for my samples:
+metadata.swc <- d0$samples
+metadata.swc$ZT <- rep(seq(from=14, to=38, by=3),each=4)
+
+```
+
+
+#### Analyzing:
+```{r}
+# calculate mean expression of each CT group in each sample
+CT_group_means_f_swc = apply(gene_data2,2,function(x) {
+		lm2 = lm(x~CT.Phase.Group+0,CT_groups_f_swc)
+		return(coef(lm2))
+})
+# Standardize across different CT.Phase.Groups
+CT_group_means_f_swc = apply(CT_group_means_f_swc,2,'-',rowMeans(CT_group_means_f_swc))
+CT_group_means_f_swc = apply(CT_group_means_f_swc,2,'/',apply(CT_group_means_f_swc,1,sd))
+
+
+# Preparing for de-transformation:
+fun = function(x) x
+ifun = function(x) x
+
+
+#pdf('CT_group_plots_by_time.pdf')
+
+for(i in 1:nrow(CT_group_means_f_swc)){
+	print(i)
+	metadata.swc$y = CT_group_means_f_swc[i,]
+	metadata.swc$ZT = as.numeric(as.character(metadata.swc$ZT))
+	
+	# Calculate means and ses
+	means = tapply(fun(metadata.swc$y),list(metadata.swc$ZT,metadata.swc$trt),mean)
+	ses = tapply(fun(metadata.swc$y),list(metadata.swc$ZT,metadata.swc$trt),se)
+	means = melt(means)
+	colnames(means) = c('ZT','Treatment','mean')
+	ses = melt(ses)
+	colnames(ses) = c('ZT','Treatment','se')
+	
+	# for plotting
+	mean_data = data.frame(means,ymin = means$mean-2*ses$se,ymax = means$mean+2*ses$se,stringsAsFactors=F)
+	mean_data$Treatment = as.character(mean_data$Treatment)
+	mean_data$mean = ifun(mean_data$mean)
+	mean_data$ymin = ifun(mean_data$ymin)
+	mean_data$ymax = ifun(mean_data$ymax)
+
+	# mean_data$ZT = factor(mean_data$ZT)
+	p = ggplot(metadata.swc,aes(x = ZT,y=y)) + ggtitle(rownames(CT_group_means_f_swc)[i])
+	p = p +  geom_point(aes(color = trt))
+	# p = p + geom_smooth(aes(color = Treatment),method=lm)
+	p = p + geom_ribbon(data=mean_data,aes(x=ZT,y=mean,ymin = ymin,ymax=ymax, linetype=NA,group = Treatment),alpha = .2)
+	p = p + geom_line(data=mean_data,aes(x=ZT,y=mean,color=Treatment)) 
+	#p = p + facet_grid(Sampling.Day~Genotype) + ylim(c(min(CT_group_means),max(CT_group_means)))
+	print(p)		
+}
+
+#dev.off()
+
+
+```
 
 
 
