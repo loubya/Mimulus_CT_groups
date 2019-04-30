@@ -1,0 +1,696 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+The goal of this analysis is to perform a CT group analysis of my Mimulus time course data.
+
+I will modify Dan's script: "CT_group_analysis.R"
+
+The data is from my JTK_Cycle.Rmd: "results_c_filtered" and "results_f_filtered". (And some other stuffs. Please load the JTK_Cycle_environment.RData.)
+
+# 0. Loading the environment and packages:
+```{r}
+library(reshape2)
+library(ggplot2)
+library(dplyr)
+
+
+load("C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/CT_group_analysis/JTK_Cycle_environment.RData")
+#load('JTK_Cycle_environment.RData')
+
+
+# The function for calculating standard error.
+se = function(x) {
+    x = na.omit(x)
+    sd(x)/sqrt(length(x))
+}
+
+```
+
+
+# 1. Organizing the data:
+
+- JTK_cycle has already assigned the genes into 16 bins.
+0, 1.5, 3, 4.5, 6, 7.5, 9, 10.5, 12, 13.5, 15, 16.5, 18, 19.5, 21, 22.5
+
+
+- Thus, there are some differences between Dan's and my data:
+(a) Dan's: 
+    - CT_groups: Define the CT phase of each gene. (From previous microarray data.)
+    - expr_transcript -> expr_gene -> log_expr_gene: expression data
+    - sub_sample_info: metadata, including Date, ZT, Trt, Samples, etc
+    
+(b) Mine:"results_c_filtered" and "results_f_filtered" contain all info of my data.
+    20190416: (1) Subset the "results_c_filtered" and "results_f_filtered" to extract the info about the CT phase                 of each gene.
+              (2) USe the output of limma-voom: DGEList object (d0) and normalized cpm (cpm_filtered).
+
+```{r}
+results_c_filtered$LAG <- factor(results_c_filtered$LAG)
+results_f_filtered$LAG <- factor(results_f_filtered$LAG)
+
+
+sample_info_swc <- data.frame(Samples = colnames(results_c_filtered[,-c(1:6)]), stringsAsFactors = F)
+sample_info_swc$ZT <- rep(seq(from=-10, to=14, by=3),each=4)
+
+
+# scaling rows:
+# scale function:
+scale_rows = function(x){
+  m = apply(x, 1, mean, na.rm = T)
+  s = apply(x, 1, sd, na.rm = T)
+  return((x - m) / s)
+}
+
+sc_c.data <- scale_rows(results_c_filtered[,-c(1:6)])
+results_c_filtered <- cbind(results_c_filtered[,c(1:6)],sc_c.data)
+#for convience, I use the `results_c_filtered` as the object name again.
+
+sc_f.data <- scale_rows(results_f_filtered[,-c(1:6)])
+results_f_filtered <- cbind(results_f_filtered[,c(1:6)],sc_f.data)
+#for convience, I use the `results_f_filtered` as the object name again.
+
+```
+
+
+# 2. Calculating mean expression of each CT group in each sample
+```{r}
+CT_group_means_swc = apply(results_c_filtered[,-c(1:6)],2,function(x) {
+		lm1 = lm(x~LAG+0,results_c_filtered)
+		return(coef(lm1))
+})
+CT_group_means_swc = apply(CT_group_means_swc,2,'-',rowMeans(CT_group_means_swc))
+CT_group_means_swc = apply(CT_group_means_swc,2,'/',apply(CT_group_means_swc,1,sd))
+
+```
+
+
+#3 Visualization of the CT groups under the constatn tmp condition (c condition).
+```{r}
+# Preparing for de-transformation:
+fun = function(x) x
+ifun = function(x) x
+
+
+#pdf('CT_group_plots_by_time.pdf')
+
+
+# Create empty data.frame for the following analysis:
+df <- data.frame(matrix(ncol = 16, nrow = 36))
+colnames(df) <- paste0("y_PG_", c(1:16))
+sample_info_swc <- bind_cols(sample_info_swc, df)
+
+final.means <- data.frame(matrix(ncol = 16, nrow = 9)) %>% mutate(ZT=seq(from=-10, to=14, by=3))
+final.ses <- data.frame(matrix(ncol = 16, nrow = 9)) %>% mutate(ZT=seq(from=-10, to=14, by=3))
+
+
+# Filling the empty dataframes!
+for(i in 1:nrow(CT_group_means_swc)){
+	print(i)
+	sample_info_swc[,i+2] = CT_group_means_swc[i,]
+	sample_info_swc$ZT = as.numeric(as.character(sample_info_swc$ZT))
+	
+	# calculate means
+	means= tapply(fun(sample_info_swc[,i+2]),sample_info_swc$ZT,mean)
+	means = melt(means)
+	colnames(means) = c('ZT','mean')
+	final.means[,i] <- means[,2]
+	
+	# calculate se
+	ses = tapply(fun(sample_info_swc[,i+2]),sample_info_swc$ZT,se)
+	ses = melt(ses)
+	colnames(ses) = c('ZT','ses')
+	final.ses[,i] <- ses[,2]
+}
+
+
+colnames.vextor <- c(paste0("PG_", c(1:16)),"ZT")
+colnames(final.means) <- colnames.vextor
+colnames(final.ses) <- colnames.vextor
+
+
+# Prepare the melted data.frame for the visualization:
+m_final.means <- melt(final.means, id.vars="ZT")
+m_final.means <- m_final.means %>% dplyr::rename(means=value, phase.group=variable)
+
+m_sample_info_swc <- melt(sample_info_swc , id.vars=c("Samples","ZT"))
+m_sample_info_swc <- m_sample_info_swc %>% dplyr::rename(expression=value, phase.group=variable)
+
+
+# Visualization (Combine 16 plots into a single figure, but without CI):
+p = ggplot(m_sample_info_swc,aes(x = ZT,y=expression))
+#p = p +  geom_point()
+	# p = p + geom_smooth(aes(color = Treatment),method=lm)
+	# p = p + geom_ribbon(data=mean_data,aes(x=ZT,y=mean,ymin = ymin,ymax=ymax, linetype=NA),alpha = .2)
+p = p + geom_line(data=m_final.means,aes(x=ZT,y=means, color=phase.group)) 
+	#p = p + facet_grid(Sampling.Day~Genotype) + ylim(c(min(CT_group_means_swc),max(CT_group_means_swc)))
+print(p)
+	
+#dev.off()
+
+
+# Original visualization (generate 16 plots): 
+for(i in 1:nrow(CT_group_means_swc)){
+	print(i)
+	sample_info_swc$y = CT_group_means_swc[i,]
+	sample_info_swc$ZT = as.numeric(as.character(sample_info_swc$ZT))
+	
+	# calculate means
+	means= tapply(fun(sample_info_swc$y),sample_info_swc$ZT,mean)
+	means = melt(means)
+	colnames(means) = c('ZT','mean')
+	
+	# calculate se
+	ses = tapply(fun(sample_info_swc$y),sample_info_swc$ZT,se)
+	ses = melt(ses)
+	colnames(ses) = c('ZT','ses')
+	
+	# for the figure: mean + ymin + ymax
+	mean_data = data.frame(means,ymin = means$mean-2*ses$se,ymax = means$mean+2*ses$se,stringsAsFactors=F)
+	mean_data$mean = ifun(mean_data$mean)
+	mean_data$ymin = ifun(mean_data$ymin)
+	mean_data$ymax = ifun(mean_data$ymax)
+	# mean_data$ZT = factor(mean_data$ZT)
+	p = ggplot(sample_info_swc,aes(x = ZT,y=y)) + ggtitle(rownames(CT_group_means_swc)[i])
+	p = p +  geom_point()
+	# p = p + geom_smooth(aes(color = Treatment),method=lm)
+	p = p + geom_ribbon(data=mean_data,aes(x=ZT,y=mean,ymin = ymin,ymax=ymax, linetype=NA),alpha = .2)
+	p = p + geom_line(data=mean_data,aes(x=ZT,y=mean)) 
+	#p = p + facet_grid(Sampling.Day~Genotype) + ylim(c(min(CT_group_means_swc),max(CT_group_means_swc)))
+	print(p)		
+}
+
+# For printing the 16 plots in a single figure:
+# Put all the plots in the list:
+pltList <- list()
+
+for(i in 1:nrow(CT_group_means_swc)){
+	print(i)
+	sample_info_swc$y = CT_group_means_swc[i,]
+	sample_info_swc$ZT = as.numeric(as.character(sample_info_swc$ZT))
+	
+	# calculate means
+	means= tapply(fun(sample_info_swc$y),sample_info_swc$ZT,mean)
+	means = melt(means)
+	colnames(means) = c('ZT','mean')
+	
+	# calculate se
+	ses = tapply(fun(sample_info_swc$y),sample_info_swc$ZT,se)
+	ses = melt(ses)
+	colnames(ses) = c('ZT','ses')
+	
+	# for the figure: mean + ymin + ymax
+	mean_data = data.frame(means,ymin = means$mean-2*ses$se,ymax = means$mean+2*ses$se,stringsAsFactors=F)
+	mean_data$mean = ifun(mean_data$mean)
+	mean_data$ymin = ifun(mean_data$ymin)
+	mean_data$ymax = ifun(mean_data$ymax)
+	# mean_data$ZT = factor(mean_data$ZT)
+	p = ggplot(sample_info_swc,aes(x = ZT,y=y)) + ggtitle(rownames(CT_group_means_swc)[i])
+	p = p +  geom_point()
+	# p = p + geom_smooth(aes(color = Treatment),method=lm)
+	p = p + geom_ribbon(data=mean_data,aes(x=ZT,y=mean,ymin = ymin,ymax=ymax, linetype=NA),alpha = .2)
+	p = p + geom_line(data=mean_data,aes(x=ZT,y=mean)) 
+	#p = p + facet_grid(Sampling.Day~Genotype) + ylim(c(min(CT_group_means_swc),max(CT_group_means_swc)))
+	
+	# Put each plot into the list
+	pltList[[i]] <- p		
+}
+
+library(gridExtra) # for grid.arrange
+library(grid)
+grid.arrange(grobs = pltList)
+
+```
+
+
+# 4. Organizing the data for comparing constant and fluctuating tmp conditions:
+1. First, check if the cycling transcripts detected under the constant condition are also rhythmic under the fluctuating condition.
+
+2. Use the `cpm_filtered` generated in JTK_Cycle analysis.
+
+3. Create a metadata for the new data set: Sample, ZT, Trt
+> Use the info from DGEList object$samples
+
+## 4.1 Using the CT groups from c condition first:
+
+#### Porcessing the data:
+Scaling the cpm_filtered
+```{r}
+cpm_filtered<- scale_rows(cpm_filtered)
+```
+
+
+```{r}
+# Using the CT groups defined by JTK_Cycle under the constant condition:
+CT_groups_c_swc <- results_c_filtered %>% select(genes, CT.Phase.Group = LAG)
+#CT_groups_c_swc <- CT_groups_c_swc[order(CT_groups_c_swc$genes),]
+
+
+# select genes in CT groups (I didn't sort the CT_groups_c_swc$genes)
+gene_data <- cpm_filtered
+gene_data = gene_data[rownames(gene_data) %in% CT_groups_c_swc$genes,]
+
+
+# select CT_groups rows with genes in gene_data and sort them
+CT_groups_c_swc = CT_groups_c_swc[match(rownames(gene_data),CT_groups_c_swc$genes),]
+
+all(CT_groups_c_swc$genes == rownames(gene_data))
+CT_groups_c_swc$CT.Phase.Group = factor(CT_groups_c_swc$CT.Phase.Group)
+
+
+# Create a metadata for my samples:
+metadata.swc <- d0$samples
+#metadata.swc$ZT <- rep(seq(from=14, to=38, by=3),each=4)
+
+```
+
+
+#### Analyzing:
+```{r}
+# calculate mean expression of each CT group in each sample
+CT_group_means_c_swc = apply(gene_data,2,function(x) {
+		lm1 = lm(x~CT.Phase.Group+0,CT_groups_c_swc)
+		return(coef(lm1))
+})
+# Standardize across different CT.Phase.Groups
+CT_group_means_c_swc = apply(CT_group_means_c_swc,2,'-',rowMeans(CT_group_means_c_swc))
+CT_group_means_c_swc = apply(CT_group_means_c_swc,2,'/',apply(CT_group_means_c_swc,1,sd))
+
+
+# Preparing for de-transformation:
+fun = function(x) x
+ifun = function(x) x
+
+
+#pdf('CT_group_plots_by_time.pdf')
+
+
+pltList_c <- list()
+
+for(i in 1:nrow(CT_group_means_c_swc)){
+	print(i)
+	metadata.swc$y = CT_group_means_c_swc[i,]
+	metadata.swc$ZT = as.numeric(as.character(metadata.swc$ZT))
+	
+	# Calculate means and ses
+	means = tapply(fun(metadata.swc$y),list(metadata.swc$ZT,metadata.swc$trt),mean)
+	ses = tapply(fun(metadata.swc$y),list(metadata.swc$ZT,metadata.swc$trt),se)
+	means = melt(means)
+	colnames(means) = c('ZT','Treatment','mean')
+	ses = melt(ses)
+	colnames(ses) = c('ZT','Treatment','se')
+	
+	# for plotting
+	mean_data = data.frame(means,ymin = means$mean-2*ses$se,ymax = means$mean+2*ses$se,stringsAsFactors=F)
+	mean_data$Treatment = as.character(mean_data$Treatment)
+	mean_data$mean = ifun(mean_data$mean)
+	mean_data$ymin = ifun(mean_data$ymin)
+	mean_data$ymax = ifun(mean_data$ymax)
+
+	# mean_data$ZT = factor(mean_data$ZT)
+	p = ggplot(metadata.swc,aes(x = ZT,y=y)) + ggtitle(rownames(CT_group_means_c_swc)[i])
+	p = p +  geom_point(aes(color = trt))
+	# p = p + geom_smooth(aes(color = Treatment),method=lm)
+	p = p + geom_ribbon(data=mean_data,aes(x=ZT,y=mean,ymin = ymin,ymax=ymax, linetype=NA,group = Treatment),alpha = .2)
+	p = p + geom_line(data=mean_data,aes(x=ZT,y=mean,color=Treatment)) 
+	#p = p + facet_grid(Sampling.Day~Genotype) + ylim(c(min(CT_group_means),max(CT_group_means)))
+	print(p)	
+	
+	pltList_c[[i]] <- p
+}
+
+#dev.off()
+
+grid.arrange(grobs = pltList_c)
+
+```
+
+
+## 4.2 Using the CT groups from f condition:
+
+#### Porcessing the data:
+```{r}
+# Using the CT groups defined by JTK_Cycle under the constant condition:
+CT_groups_f_swc <- results_f_filtered %>% select(genes, CT.Phase.Group = LAG)
+#CT_groups_c_swc <- CT_groups_c_swc[order(CT_groups_c_swc$genes),]
+
+
+# select genes in CT groups (I didn't sort the CT_groups_c_swc$genes)
+gene_data2 <- cpm_filtered
+gene_data2 = gene_data2[rownames(gene_data2) %in% CT_groups_f_swc$genes,]
+
+
+# select CT_groups rows with genes in gene_data2 and sort them
+CT_groups_f_swc = CT_groups_f_swc[match(rownames(gene_data2),CT_groups_f_swc$genes),]
+
+all(CT_groups_f_swc$genes == rownames(gene_data2))
+CT_groups_f_swc$CT.Phase.Group = factor(CT_groups_f_swc$CT.Phase.Group)
+
+
+# Create a metadata for my samples:
+metadata.swc <- d0$samples
+#metadata.swc$ZT <- rep(seq(from=14, to=38, by=3),each=4)
+
+```
+
+
+#### Analyzing:
+```{r}
+# calculate mean expression of each CT group in each sample
+CT_group_means_f_swc = apply(gene_data2,2,function(x) {
+		lm2 = lm(x~CT.Phase.Group+0,CT_groups_f_swc)
+		return(coef(lm2))
+})
+# Standardize across different CT.Phase.Groups
+CT_group_means_f_swc = apply(CT_group_means_f_swc,2,'-',rowMeans(CT_group_means_f_swc))
+CT_group_means_f_swc = apply(CT_group_means_f_swc,2,'/',apply(CT_group_means_f_swc,1,sd))
+
+
+# Preparing for de-transformation:
+fun = function(x) x
+ifun = function(x) x
+
+
+#pdf('CT_group_plots_by_time.pdf')
+
+pltList_f <- list()
+
+for(i in 1:nrow(CT_group_means_f_swc)){
+	print(i)
+	metadata.swc$y = CT_group_means_f_swc[i,]
+	metadata.swc$ZT = as.numeric(as.character(metadata.swc$ZT))
+	
+	# Calculate means and ses
+	means = tapply(fun(metadata.swc$y),list(metadata.swc$ZT,metadata.swc$trt),mean)
+	ses = tapply(fun(metadata.swc$y),list(metadata.swc$ZT,metadata.swc$trt),se)
+	means = melt(means)
+	colnames(means) = c('ZT','Treatment','mean')
+	ses = melt(ses)
+	colnames(ses) = c('ZT','Treatment','se')
+	
+	# for plotting
+	mean_data = data.frame(means,ymin = means$mean-2*ses$se,ymax = means$mean+2*ses$se,stringsAsFactors=F)
+	mean_data$Treatment = as.character(mean_data$Treatment)
+	mean_data$mean = ifun(mean_data$mean)
+	mean_data$ymin = ifun(mean_data$ymin)
+	mean_data$ymax = ifun(mean_data$ymax)
+
+	# mean_data$ZT = factor(mean_data$ZT)
+	p = ggplot(metadata.swc,aes(x = ZT,y=y)) + ggtitle(rownames(CT_group_means_f_swc)[i])
+	p = p +  geom_point(aes(color = trt))
+	# p = p + geom_smooth(aes(color = Treatment),method=lm)
+	p = p + geom_ribbon(data=mean_data,aes(x=ZT,y=mean,ymin = ymin,ymax=ymax, linetype=NA,group = Treatment),alpha = .2)
+	p = p + geom_line(data=mean_data,aes(x=ZT,y=mean,color=Treatment)) 
+	#p = p + facet_grid(Sampling.Day~Genotype) + ylim(c(min(CT_group_means),max(CT_group_means)))
+	print(p)		
+	
+	pltList_f[[i]] <- p
+}
+
+#dev.off()
+
+grid.arrange(grobs = pltList_f)
+
+```
+
+
+# 5. Analyzing if there is any phase change comparing c and f condition
+We would like to test the hypothesis:  
+
+##  5.1: USing the CT group defined by c samples: 
+```{r}
+# Transform the CT_group_means_c_swc data.frame and subset it:
+c.condition_CT.gm <- t(CT_group_means_c_swc)[c(1:36),]
+f.condition_CT.gm <- t(CT_group_means_c_swc)[c(37:72),]
+
+```
+
+#### Run the JTK_Cycle
+This part is modified from ¡§Run_JTK_CYCLE (Example2).R¡¨ provided by JTK_Cycle authors.
+
+
+1. Set up some variables:
+```{r}
+source("C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/JTK_cycle/JTK_CYCLEv3.1.R")
+
+# This is a setting for preventing some data.frame loading issues.
+options(stringsAsFactors=FALSE)
+
+```
+
+
+2. Set the parameters for the analysis:
+I have 16 phase groups (different columns) -> Think: 16 time points when running JTK_Cycle
+```{r}
+# equivalent to 16 total time points, 1 replicates per time point
+jtkdist(16, 1)
+
+# Looking for rhythms of 24 hours. (We used the LD conditions so we are only interested in 24h-rhythms.)
+periods <- 16       
+
+# 1.5 is the number of hours between cT groups
+jtk.init(periods,1.5) 
+
+```
+
+
+3. Run the analysis:
+
+3.1. Run the constant tmp first:
+```{r}
+# Set up the `annot` and `data` which are written in the script we sourced.
+annot <- as.data.frame(rownames(c.condition_CT.gm))  
+colnames(annot) <- "samples"
+
+
+# Set up the `project` and `data`
+project <- "c.condition_CT.groups"
+data <- c.condition_CT.gm
+
+# Run
+cat("JTK analysis started on",date(),"\n")
+flush.console()
+
+st <- system.time({
+  res <- apply(data,1,function(z) {
+    jtkx(z)
+    c(JTK.ADJP,JTK.PERIOD,JTK.LAG,JTK.AMP)
+  })
+  res <- as.data.frame(t(res))
+  bhq <- p.adjust(unlist(res[,1]),"BH")
+  res <- cbind(bhq,res)
+  colnames(res) <- c("BH.Q","ADJ.P","PER","LAG","AMP")
+  results_c.condition_CT.groups <- cbind(annot,res,data)
+  #results_c.condition_CT.groups <- results_c.condition_CT.groups[order(res$ADJ.P,-res$AMP),]
+})
+print(st)
+
+
+# Export the results:
+#save(results_c,file=paste("JTK",project,"rda",sep="."))
+#write.table(results_c,file=paste("JTK",project,"txt",sep="."),row.names=F,col.names=T,quote=F,sep="\t")
+
+```
+
+
+3.2. Run the fluctuating tmp:
+```{r}
+# Set up the `annot` and `data` which are written in the script we sourced.
+annot <- as.data.frame(rownames(f.condition_CT.gm))  
+colnames(annot) <- "samples"
+
+# Set up the `project` and `data`
+project <- "f.condition_CT.groups"
+data <- f.condition_CT.gm
+
+# Run
+cat("JTK analysis started on",date(),"\n")
+flush.console()
+
+st <- system.time({
+  res <- apply(data,1,function(z) {
+    jtkx(z)
+    c(JTK.ADJP,JTK.PERIOD,JTK.LAG,JTK.AMP)
+  })
+  res <- as.data.frame(t(res))
+  bhq <- p.adjust(unlist(res[,1]),"BH")
+  res <- cbind(bhq,res)
+  colnames(res) <- c("BH.Q","ADJ.P","PER","LAG","AMP")
+  results_f.condition_CT.groups <- cbind(annot,res,data)
+  #results_f.condition_CT.groups <- results_f.condition_CT.groups[order(res$ADJ.P,-res$AMP),]
+})
+print(st)
+
+
+# Export the results:
+#save(results_f,file=paste("JTK",project,"rda",sep="."))
+#write.table(results_f,file=paste("JTK",project,"txt",sep="."),row.names=F,col.names=T,quote=F,sep="\t")
+
+```
+
+
+4. Visualization!
+```{r}
+r.c <- results_c.condition_CT.groups[,c(1,5)]
+r.f <- results_f.condition_CT.groups[,c(1,5)]
+
+r.total <- rbind(r.c, r.f)
+
+r.total$expected_LAG <- rep(c(seq(from=0, to=21, by=3),0),each=4)
+
+r.total$trt <- rep(c("c","f"),each=36)
+
+ggplot(r.total,aes(x = expected_LAG,y=LAG)) + 
+  #geom_point(aes(color = trt)) +
+  geom_jitter(aes(color = trt), width = .3)
+
+ggplot(r.total,aes(x = expected_LAG,y=LAG)) + 
+  #geom_point(aes(color = trt)) +
+  #geom_jitter(aes(color = trt), width = .3)
+  geom_boxplot(aes(group = interaction(expected_LAG,trt),color=trt)) +
+  geom_abline(slope=1,intercept = 0)
+```
+> This time, I define the CT groups by c samples. Theoretically, the LAG of f samples predicted by JTK_Cycle should match to the expected LAG line (diagonal).
+
+> The phases of c and f groups are almost the same. Although it seems there is a lag when comparing c samples to f samples. 
+
+##  5.2: USing the CT group defined by c samples: 
+```{r}
+# Transform the CT_group_means_f_swc data.frame and subset it:
+c.condition_CT.gm <- t(CT_group_means_f_swc)[c(1:36),]
+f.condition_CT.gm <- t(CT_group_means_f_swc)[c(37:72),]
+
+```
+
+#### Run the JTK_Cycle
+This part is modified from ¡§Run_JTK_CYCLE (Example2).R¡¨ provided by JTK_Cycle authors.
+
+
+1. Set up some variables:
+```{r}
+source("C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/JTK_cycle/JTK_CYCLEv3.1.R")
+
+# This is a setting for preventing some data.frame loading issues.
+options(stringsAsFactors=FALSE)
+
+```
+
+
+2. Set the parameters for the analysis:
+```{r}
+# equivalent to 16 total time points, 1 replicates per time point
+jtkdist(16, 1)
+
+# Looking for rhythms of 24 hours. (We used the LD conditions so we are only interested in 24h-rhythms.)
+periods <- 16       
+
+# 1.5 is the number of hours between cT groups
+jtk.init(periods,1.5) 
+
+```
+
+
+3. Run the analysis: 
+
+3.1. Run the constant tmp first:
+```{r}
+# Set up the `annot` and `data` which are written in the script we sourced.
+annot <- as.data.frame(rownames(c.condition_CT.gm))  
+colnames(annot) <- "samples"
+
+# Set up the `project` and `data`
+project <- "c.condition_CT.groups"
+data <- c.condition_CT.gm
+
+# Run
+cat("JTK analysis started on",date(),"\n")
+flush.console()
+
+st <- system.time({
+  res <- apply(data,1,function(z) {
+    jtkx(z)
+    c(JTK.ADJP,JTK.PERIOD,JTK.LAG,JTK.AMP)
+  })
+  res <- as.data.frame(t(res))
+  bhq <- p.adjust(unlist(res[,1]),"BH")
+  res <- cbind(bhq,res)
+  colnames(res) <- c("BH.Q","ADJ.P","PER","LAG","AMP")
+  results_c.condition_CT.groups <- cbind(annot,res,data)
+  #results_c.condition_CT.groups <- results_c.condition_CT.groups[order(res$ADJ.P,-res$AMP),]
+})
+print(st)
+
+
+# Export the results:
+#save(results_c,file=paste("JTK",project,"rda",sep="."))
+#write.table(results_c,file=paste("JTK",project,"txt",sep="."),row.names=F,col.names=T,quote=F,sep="\t")
+
+```
+
+
+3.2. Run the fluctuating tmp:
+```{r}
+# Set up the `annot` and `data` which are written in the script we sourced.
+annot <- as.data.frame(rownames(f.condition_CT.gm))  
+colnames(annot) <- "samples"
+
+# Set up the `project` and `data`
+project <- "f.condition_CT.groups"
+data <- f.condition_CT.gm
+
+# Run
+cat("JTK analysis started on",date(),"\n")
+flush.console()
+
+st <- system.time({
+  res <- apply(data,1,function(z) {
+    jtkx(z)
+    c(JTK.ADJP,JTK.PERIOD,JTK.LAG,JTK.AMP)
+  })
+  res <- as.data.frame(t(res))
+  bhq <- p.adjust(unlist(res[,1]),"BH")
+  res <- cbind(bhq,res)
+  colnames(res) <- c("BH.Q","ADJ.P","PER","LAG","AMP")
+  results_f.condition_CT.groups <- cbind(annot,res,data)
+  #results_f.condition_CT.groups <- results_f.condition_CT.groups[order(res$ADJ.P,-res$AMP),]
+})
+print(st)
+
+
+# Export the results:
+#save(results_f,file=paste("JTK",project,"rda",sep="."))
+#write.table(results_f,file=paste("JTK",project,"txt",sep="."),row.names=F,col.names=T,quote=F,sep="\t")
+
+```
+
+
+4. Visualization:
+```{r}
+r.c <- results_c.condition_CT.groups[,c(1,5)]
+r.f <- results_f.condition_CT.groups[,c(1,5)]
+
+r.total <- rbind(r.c, r.f)
+
+r.total$expected_LAG <- rep(c(seq(from=0, to=21, by=3),0),each=4)
+
+r.total$trt <- rep(c("c","f"),each=36)
+
+ggplot(r.total,aes(x = expected_LAG,y=LAG)) + 
+  #geom_point(aes(color = trt)) +
+  #geom_jitter(aes(color = trt), width = .3)
+  geom_boxplot(aes(group = interaction(expected_LAG,trt),color=trt)) +
+  geom_abline(slope=1,intercept = 0)
+
+
+
+```
+> This time, I define the CT groups by f samples. Interestingly, the LAG of f samples predicted by JTK_Cycle almost match to the expected LAG line (diagonal). Again, it seems there is a slight lag when comparing c samples to f samples. (Most obvious: 5th point = CT.group 12:ZT=7)
+
+
+> I think the reason of this weird behavior is because the program can only bin the peaks into a certain number of CT groups. It is not cotinuous! This may cause some issues especially I defined different LAG groups in 2 analyses.
+
+
+
+
